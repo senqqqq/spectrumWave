@@ -9,7 +9,8 @@ uv run spectrum_wave.py 10.2_waveforms.csv --scheme mpp --trigger ext0
 uv run spectrum_wave.py raw.csv --sample-rate 250e6 --loops 10
 
 普通 CSV 每行一个归一化采样值，可有 amplitude 或 ch0 表头。
-NumPy 输入为 (N,) 原始采样或 (N, 2) 的 [Rabi 幅值, 相位(rad)]。
+NumPy 输入为 (N,) 原始采样、(N, 2) 的 [Rabi 幅值, 相位(rad)]，
+或 (N, 3) 的 [时间(µs), Rabi 幅值, 相位(rad)]。
 等间隔输入需传 sample_rate (Sa/s)，最后一个采样占一个采样周期。
 原始采样升采样用线性插值，末点保持；降采样按单周期做傅里叶重采样。
 带 time_us 的包络以最后一个时间戳为结束边界。连续段之间线性插值，
@@ -29,7 +30,12 @@ CARD_RATE = 1_250_000_000
 DEFAULT_CARRIER = 100_000_000
 
 
-def _read_csv(path, scheme):
+def read_waveform_csv(path: str | Path, *, scheme: str | None = None) -> np.ndarray:
+    """读取一个方案的原始数值，返回可编辑的 float64 数组。
+
+    单列采样返回 (N,)；幅相列返回 (N, 2)，顺序为 rabi_khz、phase_rad。
+    带时间戳时返回 (N, 3)，第一列为 time_us，保留重复时间戳与原始行序。
+    """
     with Path(path).open(encoding="utf-8-sig", newline="") as stream:
         header = [name.strip() for name in next(csv.reader(stream), [])]
         if {"rabi_khz", "phase_rad"}.issubset(header):
@@ -47,14 +53,15 @@ def _read_csv(path, scheme):
                 if scheme is not None:
                     raise ValueError("此 CSV 缺少 scheme 列")
                 records = list(rows)
+            if not records:
+                raise ValueError("波形 CSV 缺少采样数据")
+            columns = ["rabi_khz", "phase_rad"]
+            if "time_us" in header:
+                columns.insert(0, "time_us")
             try:
-                envelope = np.array([[float(r["rabi_khz"]), float(r["phase_rad"])] for r in records])
-                times = None
-                if "time_us" in header:
-                    times = np.array([float(r["time_us"]) for r in records]) * 1e-6
+                return np.array([[float(r[col]) for col in columns] for r in records], dtype=np.float64)
             except (ValueError, TypeError) as exc:
                 raise ValueError("请检查所选波形的幅值、相位和时间列，所有值都须为数字") from exc
-            return envelope, times
         if scheme is not None:
             raise ValueError("--scheme 需要含 scheme、rabi_khz 和 phase_rad 列的 CSV")
         if header not in (["ch0"], ["amplitude"]):
@@ -62,25 +69,30 @@ def _read_csv(path, scheme):
         raw = np.loadtxt(stream, delimiter=",", ndmin=2)
         if raw.shape[1] != 1:
             raise ValueError("原始波形 CSV 需要单列 CH0 采样值")
-        return raw[:, 0], None
+        if not raw.size:
+            raise ValueError("波形 CSV 缺少采样数据")
+        return raw[:, 0]
 
 
 def prepare_waveform(source, sample_rate=None, *, scheme=None, carrier_hz=DEFAULT_CARRIER):
     """返回 (补齐后的 int16 DAC 数组, 有效点数)，可独立于驱动使用。"""
     times = None
     if isinstance(source, (str, Path)):
-        source, times = _read_csv(source, scheme)
+        source = read_waveform_csv(source, scheme=scheme)
     elif scheme is not None:
         raise ValueError("只有带 scheme 列的 CSV 可选方案")
     data = np.asarray(source)
     if data.dtype.kind not in "iuf" or data.size == 0 or not np.isfinite(data).all():
         raise ValueError("波形必须是非空的有限实数数组")
     data = data.astype(np.float64, copy=False)
-    if data.ndim == 2 and data.shape[1] == 1:
+    if data.ndim == 2 and data.shape[1] == 3:
+        times = data[:, 0] * 1e-6
+        data = data[:, 1:]
+    elif data.ndim == 2 and data.shape[1] == 1:
         data = data[:, 0]
     envelope = data.ndim == 2 and data.shape[1] == 2
     if data.ndim != 1 and not envelope:
-        raise ValueError("需要 (N,) 原始采样或 (N, 2) 的 [Rabi, phase_rad]")
+        raise ValueError("需要原始采样 (N,)、幅相 (N, 2) 或带 time_us 的幅相 (N, 3)")
 
     if times is None:
         if sample_rate is None or not np.isfinite(sample_rate) or sample_rate <= 0:
@@ -88,7 +100,7 @@ def prepare_waveform(source, sample_rate=None, *, scheme=None, carrier_hz=DEFAUL
         duration = len(data) / sample_rate
     else:
         if sample_rate is not None:
-            raise ValueError("带 time_us 的 CSV 已定义时间轴，请省略 sample_rate")
+            raise ValueError("带 time_us 的波形已定义时间轴，请省略 sample_rate")
         if not np.isfinite(times).all() or np.any(np.diff(times) < 0):
             raise ValueError("所选方案内的 time_us 必须有限且单调不减")
         times = times - times[0]

@@ -71,19 +71,49 @@ uv run --locked --extra hardware spectrum-wave 10.2_waveforms.csv --scheme pulse
 uv run --locked spectrum-wave raw.csv --sample-rate 250e6 --dry-run
 ```
 
-**NumPy 数组** 可传形状为 `(N,)` 的原始采样，或形状为 `(N, 2)` 的幅相数据，两列依次为 Rabi 幅值与相位（弧度）。下面的例子可在项目的 Python 环境中离线运行。
+### 用 Python 定义并播放 NumPy 波形
+
+在项目根目录运行 `my_wave.py`。默认示例使用 250 MSa/s 的输入采样率定义 10 MHz 正弦波。加 `--envelope` 可试用幅相数组，以平滑包络调制 100 MHz 载波。
+
+```sh
+uv run --locked python my_wave.py --dry-run
+uv run --locked python my_wave.py --envelope --dry-run
+```
+
+在板卡主机上运行 `uv run --locked --extra hardware python my_wave.py`，即可将示例上传到 CH0 并播放一次。在自己的脚本中可直接调用同一个接口。
 
 ```python
 import numpy as np
-from spectrum_wave import prepare_waveform
+from spectrum_wave import play_waveform
 
 fs = 250e6
 t = np.arange(1000) / fs
 wave = 0.5 * np.sin(2 * np.pi * 10e6 * t)
-codes, valid_samples = prepare_waveform(wave, sample_rate=fs)
+play_waveform(wave, sample_rate=fs, dry_run=True)
 ```
 
-在板卡主机上，可用 `play_waveform(wave, sample_rate=fs)` 上传并播放同一数组。它和 `prepare_waveform` 均位于 `spectrum_wave` 模块。
+### 将 CSV 读成 NumPy 数组再编辑
+
+`read_waveform_csv()` 返回可编辑的 `float64` 数组。列的顺序如下，`N` 为选中波形的行数。
+
+| CSV 内容 | 数组形状和列顺序 | 回放时的时间轴 |
+| --- | --- | --- |
+| 单列原始波形 | `(N,)` 幅值 | 传 `sample_rate` |
+| 幅相数据 | `(N, 2)`，依次为 `rabi_khz, phase_rad` | 传 `sample_rate` |
+| 带时间戳的幅相数据 | `(N, 3)`，依次为 `time_us, rabi_khz, phase_rad` | 使用首列，省略 `sample_rate` |
+
+例如，读出 `pulse_shaped` 后给整个脉冲增加 π/2 的相位。数组保留原始时间戳和幅相值，回放时才做归一化、插值和量化。
+
+```python
+import numpy as np
+from spectrum_wave import play_waveform, read_waveform_csv
+
+pulse = read_waveform_csv("10.2_waveforms.csv", scheme="pulse_shaped")
+pulse[:, 2] += np.pi / 2
+play_waveform(pulse, dry_run=True)
+```
+
+要查看将要上传的 DAC 数组及有效点数，也可调用 `codes, valid_samples = prepare_waveform(pulse)`，该函数位于 `spectrum_wave` 模块。
 
 ## 离线测试
 
