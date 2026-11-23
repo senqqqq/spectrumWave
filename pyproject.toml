@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spectrum-wave"
+version = "0.1.0"
+description = "Single-channel waveform synthesis and replay for the Spectrum M4i.6631-x8 AWG"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["numpy", "scipy"]
+
+[project.optional-dependencies]
+hardware = ["spcm>=1.13.4,<2"]
+
+[project.scripts]
+spectrum-wave = "spectrum_wave:main"
+
+[project.urls]
+Repository = "https://github.com/senqqqq/spectrumWave"
+
+[tool.setuptools]
+py-modules = ["spectrum_wave"]
