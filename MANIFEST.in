@@ -1,1 +1,1 @@
-include 10.2_waveforms.csv .python-version uv.lock
+include 10.2_waveforms.csv my_wave.py .python-version uv.lock
